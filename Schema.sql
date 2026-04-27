@@ -43,16 +43,6 @@ CREATE TABLE Reservations (
     ReservationDateCreated DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     Status ENUM('Reserved', 'CheckedIn', 'Cancelled', 'Completed', 'NoShow') NOT NULL DEFAULT 'Reserved',
 
-    ActiveStudentID INT GENERATED ALWAYS AS (
-        CASE WHEN Status IN ('Reserved', 'CheckedIn') THEN StudentID ELSE NULL END
-    ) STORED,
-    ActiveRoomID INT GENERATED ALWAYS AS (
-        CASE WHEN Status IN ('Reserved', 'CheckedIn') THEN RoomID ELSE NULL END
-    ) STORED,
-    ActiveSlotID INT GENERATED ALWAYS AS (
-        CASE WHEN Status IN ('Reserved', 'CheckedIn') THEN SlotID ELSE NULL END
-    ) STORED,
-
     CONSTRAINT fk_reservations_student
         FOREIGN KEY (StudentID) REFERENCES Students(StudentID)
         ON UPDATE CASCADE
@@ -64,10 +54,7 @@ CREATE TABLE Reservations (
     CONSTRAINT fk_reservations_slot
         FOREIGN KEY (SlotID) REFERENCES TimeSlots(SlotID)
         ON UPDATE CASCADE
-        ON DELETE RESTRICT,
-
-    CONSTRAINT uq_active_room_slot UNIQUE (ActiveRoomID, ActiveSlotID),
-    CONSTRAINT uq_active_student_room_slot UNIQUE (ActiveStudentID, ActiveRoomID, ActiveSlotID)
+        ON DELETE RESTRICT
 );
 
 CREATE TABLE Waitlist (
@@ -101,89 +88,3 @@ CREATE INDEX idx_studyrooms_type ON StudyRooms(RoomType);
 CREATE INDEX idx_timeslots_date_time ON TimeSlots(ReservationDate, StartTime, EndTime);
 CREATE INDEX idx_reservations_status ON Reservations(Status);
 CREATE INDEX idx_waitlist_room_slot ON Waitlist(RoomID, SlotID, WaitlistID);
-
-DELIMITER $$
-
-CREATE TRIGGER trg_reservations_before_insert
-BEFORE INSERT ON Reservations
-FOR EACH ROW
-BEGIN
-    DECLARE student_status VARCHAR(20);
-    DECLARE room_status VARCHAR(20);
-    DECLARE slot_start DATETIME;
-
-    IF NEW.Status IN ('Reserved', 'CheckedIn') THEN
-        SELECT Status
-        INTO student_status
-        FROM Students
-        WHERE StudentID = NEW.StudentID;
-
-        IF student_status <> 'Active' THEN
-            SIGNAL SQLSTATE '45000'
-                SET MESSAGE_TEXT = 'Error: Student account is inactive and cannot make reservations.';
-        END IF;
-
-        SELECT AvailabilityStatus
-        INTO room_status
-        FROM StudyRooms
-        WHERE RoomID = NEW.RoomID;
-
-        IF room_status <> 'Available' THEN
-            SIGNAL SQLSTATE '45000'
-                SET MESSAGE_TEXT = 'Error: This study room is currently unavailable.';
-        END IF;
-
-        SELECT TIMESTAMP(ReservationDate, StartTime)
-        INTO slot_start
-        FROM TimeSlots
-        WHERE SlotID = NEW.SlotID;
-
-        IF slot_start <= NOW() THEN
-            SIGNAL SQLSTATE '45000'
-                SET MESSAGE_TEXT = 'Error: Reservations can only be made for future predefined time slots.';
-        END IF;
-    END IF;
-END$$
-
-CREATE TRIGGER trg_reservations_before_update
-BEFORE UPDATE ON Reservations
-FOR EACH ROW
-BEGIN
-    DECLARE student_status VARCHAR(20);
-    DECLARE room_status VARCHAR(20);
-    DECLARE slot_start DATETIME;
-
-    IF NEW.Status IN ('Reserved', 'CheckedIn') THEN
-        SELECT Status
-        INTO student_status
-        FROM Students
-        WHERE StudentID = NEW.StudentID;
-
-        IF student_status <> 'Active' THEN
-            SIGNAL SQLSTATE '45000'
-                SET MESSAGE_TEXT = 'Error: Student account is inactive and cannot make reservations.';
-        END IF;
-
-        SELECT AvailabilityStatus
-        INTO room_status
-        FROM StudyRooms
-        WHERE RoomID = NEW.RoomID;
-
-        IF room_status <> 'Available' THEN
-            SIGNAL SQLSTATE '45000'
-                SET MESSAGE_TEXT = 'Error: This study room is currently unavailable.';
-        END IF;
-
-        SELECT TIMESTAMP(ReservationDate, StartTime)
-        INTO slot_start
-        FROM TimeSlots
-        WHERE SlotID = NEW.SlotID;
-
-        IF slot_start <= NOW() THEN
-            SIGNAL SQLSTATE '45000'
-                SET MESSAGE_TEXT = 'Error: Reservations can only be made for future predefined time slots.';
-        END IF;
-    END IF;
-END$$
-
-DELIMITER ;
