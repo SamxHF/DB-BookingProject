@@ -624,8 +624,18 @@ def check_in_reservation(reservation_id):
         if reservation["Status"] != "Reserved":
             raise ApiError("Error: Only reserved reservations can be checked in.")
 
-        cursor.execute("SELECT NOW() > %s AS IsExpired", (reservation["SlotEnd"],))
-        if cursor.fetchone()["IsExpired"]:
+        cursor.execute(
+            """
+            SELECT
+                NOW() < %s AS IsTooEarly,
+                NOW() > %s AS IsExpired
+            """,
+            (reservation["SlotStart"], reservation["SlotEnd"]),
+        )
+        timing = cursor.fetchone()
+        if timing["IsTooEarly"]:
+            raise ApiError("Error: Cannot check in before the reservation start time.")
+        if timing["IsExpired"]:
             raise ApiError("Error: Cannot check in for an expired reservation.")
 
         cursor.execute(
