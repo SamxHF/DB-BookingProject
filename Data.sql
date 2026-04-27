@@ -1,13 +1,5 @@
 USE `DB Project`;
 
-SET FOREIGN_KEY_CHECKS = 0;
-TRUNCATE TABLE Waitlist;
-TRUNCATE TABLE Reservations;
-TRUNCATE TABLE TimeSlots;
-TRUNCATE TABLE StudyRooms;
-TRUNCATE TABLE Students;
-SET FOREIGN_KEY_CHECKS = 1;
-
 INSERT INTO Students (StudentID, Name, Email, Phone, Major, YearLevel, Status) VALUES
 (1, 'Aisha Al Mansoori', 'aisha.almansoori@ku.ac.ae', '+971501112233', 'Computer Science', 3, 'Active'),
 (2, 'Omar Haddad', 'omar.haddad@ku.ac.ae', '+971502223344', 'Electrical Engineering', 2, 'Active'),
