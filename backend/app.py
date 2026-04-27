@@ -550,18 +550,46 @@ def cancel_reservation(reservation_id):
 
 @app.patch("/api/reservations/<int:reservation_id>/complete")
 def complete_reservation(reservation_id):
-    with db_cursor(commit=True) as (_, cursor):
+    with db_cursor() as (connection, cursor):
+        cursor.execute(
+            """
+            SELECT ReservationID, RoomID, SlotID, Status
+            FROM Reservations
+            WHERE ReservationID = %s
+            FOR UPDATE
+            """,
+            (reservation_id,),
+        )
+        reservation = cursor.fetchone()
+        if not reservation:
+            raise ApiError("Error: Reservation ID does not exist.", 404)
+        if reservation["Status"] == "Completed":
+            connection.commit()
+            return jsonify({"message": "Reservation was already completed.", "cleared_waitlist_count": 0})
+        if reservation["Status"] not in ACTIVE_RESERVATION_STATUSES:
+            raise ApiError("Error: Only reserved or checked-in reservations can be marked completed.")
+
         cursor.execute(
             """
             UPDATE Reservations
             SET Status = 'Completed'
-            WHERE ReservationID = %s AND Status IN ('Reserved', 'CheckedIn')
+            WHERE ReservationID = %s
             """,
             (reservation_id,),
         )
-        if cursor.rowcount == 0:
-            raise ApiError("Error: Reservation cannot be marked completed.", 400)
-    return jsonify({"message": "Reservation marked as completed."})
+        cursor.execute(
+            """
+            DELETE FROM Waitlist
+            WHERE RoomID = %s AND SlotID = %s
+            """,
+            (reservation["RoomID"], reservation["SlotID"]),
+        )
+        cleared_waitlist_count = cursor.rowcount
+        connection.commit()
+    return jsonify({
+        "message": "Reservation marked as completed. Waitlist for this room-slot was closed.",
+        "cleared_waitlist_count": cleared_waitlist_count,
+    })
 
 
 @app.patch("/api/reservations/<int:reservation_id>/check-in")

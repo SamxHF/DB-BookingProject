@@ -11,7 +11,7 @@ Full-stack database project for COSC444. The backend is a Flask REST API connect
 - Check-in handling: check in valid reservations and reject cancelled, completed, no-show, or expired reservations with clear messages.
 - Reporting: available rooms for a slot, reservations by student/room/date/status, and students who reserved a specific room-slot.
 - Advanced feature 1: room availability recommendation by date, slot, capacity, room type, and sort order.
-- Advanced feature 2: waitlist with automatic promotion when a reservation is cancelled.
+- Advanced feature 2: waitlist with automatic promotion when a reservation is cancelled, and waitlist cleanup when a reservation is completed.
 
 ## Project Structure
 
@@ -113,8 +113,9 @@ The Vite dev server proxies `/api` requests to Flask on port `5001`.
 3. Try reserving the same room and slot again to show double-booking prevention.
 4. Use "Join waitlist if booked" to add a student to the waitlist.
 5. Cancel the original reservation to show automatic waitlist promotion.
-6. Use Reports to show student schedules, available rooms, and room-slot reservations.
-7. Use Advanced to show room recommendations and the waitlist queue.
+6. Complete a reservation to show that stale waitlist entries for that room-slot are cleared.
+7. Use Reports to show student schedules, available rooms, and room-slot reservations.
+8. Use Advanced to show room recommendations and the waitlist queue.
 
 ## Error Handling Covered
 

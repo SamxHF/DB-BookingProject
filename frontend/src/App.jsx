@@ -403,7 +403,8 @@ export default function App() {
     if (!reservationActionId) return showError(new Error('Enter a Reservation ID first.'));
     const result = await run(() => patch(`/reservations/${reservationActionId}/complete`));
     if (result) {
-      showSuccess(result.message);
+      const cleared = result.cleared_waitlist_count ? ` Cleared ${result.cleared_waitlist_count} waitlist entry/entries.` : '';
+      showSuccess(`${result.message}${cleared}`);
       loadAll();
     }
   }
