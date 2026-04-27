@@ -79,12 +79,3 @@ CREATE TABLE Waitlist (
 
     CONSTRAINT uq_waitlist_student_room_slot UNIQUE (StudentID, RoomID, SlotID)
 );
-
-CREATE INDEX idx_students_name ON Students(Name);
-CREATE INDEX idx_students_major ON Students(Major);
-CREATE INDEX idx_students_status ON Students(Status);
-CREATE INDEX idx_studyrooms_capacity ON StudyRooms(Capacity);
-CREATE INDEX idx_studyrooms_type ON StudyRooms(RoomType);
-CREATE INDEX idx_timeslots_date_time ON TimeSlots(ReservationDate, StartTime, EndTime);
-CREATE INDEX idx_reservations_status ON Reservations(Status);
-CREATE INDEX idx_waitlist_room_slot ON Waitlist(RoomID, SlotID, WaitlistID);
