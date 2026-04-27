@@ -1,9 +1,10 @@
+import base64
 from functools import wraps
 
 from flask import Flask, jsonify, request
 from mysql.connector import Error as MySQLError
 
-from db import db_cursor, fetch_all, fetch_one, serialize_row
+from db import db_cursor, fetch_all, fetch_one, get_last_sql_statement, reset_last_sql_statement, serialize_row
 
 
 ACTIVE_RESERVATION_STATUSES = ("Reserved", "CheckedIn")
@@ -23,6 +24,7 @@ class ApiError(Exception):
 def handle_preflight():
     if request.method == "OPTIONS":
         return ("", 204)
+    reset_last_sql_statement()
 
 
 @app.after_request
@@ -30,6 +32,10 @@ def add_cors_headers(response):
     response.headers["Access-Control-Allow-Origin"] = "*"
     response.headers["Access-Control-Allow-Headers"] = "Content-Type"
     response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+    response.headers["Access-Control-Expose-Headers"] = "X-Last-SQL-Query-B64"
+    last_sql = get_last_sql_statement()
+    if last_sql:
+        response.headers["X-Last-SQL-Query-B64"] = base64.b64encode(last_sql.encode("utf-8")).decode("ascii")
     return response
 
 
@@ -68,12 +74,12 @@ def handle_mysql_error(error):
         else:
             message = "Error: A duplicate record already exists."
     elif errno == 1451:
-        message = "Error: This record is still referenced by other records."
+        message = "Error: Cannot delete this row because SQL foreign key rules show it is still referenced by another table. Delete the related reservation rows first."
     elif errno == 1452:
         message = "Error: Invalid student, room, or time slot ID."
     elif errno in (1048, 1265, 1292, 1366, 1406, 3819):
         message = "Error: Invalid input. Please check the values and try again."
-    elif "inactive" in lower_message or "reserved" in lower_message or "future" in lower_message:
+    elif "inactive" in lower_message or "reserved" in lower_message or "future" in lower_message or "overlaps" in lower_message:
         message = message
     else:
         message = "Error: A database problem occurred. Please check the input and try again."
@@ -287,11 +293,16 @@ def update_student(student_id):
 
 @app.delete("/api/students/<int:student_id>")
 def deactivate_student(student_id):
+    hard_delete = request.args.get("hard") == "true"
     with db_cursor(commit=True) as (_, cursor):
-        cursor.execute("UPDATE Students SET Status = 'Inactive' WHERE StudentID = %s", (student_id,))
+        if hard_delete:
+            cursor.execute("DELETE FROM Students WHERE StudentID = %s", (student_id,))
+        else:
+            cursor.execute("UPDATE Students SET Status = 'Inactive' WHERE StudentID = %s", (student_id,))
         if cursor.rowcount == 0:
             raise ApiError("Error: Student ID does not exist.", 404)
-    return jsonify({"message": "Student deactivated successfully."})
+    action = "deleted" if hard_delete else "deactivated"
+    return jsonify({"message": f"Student {action} successfully."})
 
 
 @app.get("/api/rooms")
@@ -350,14 +361,7 @@ def remove_room(room_id):
     hard_delete = request.args.get("hard") == "true"
     with db_cursor(commit=True) as (_, cursor):
         if hard_delete:
-            try:
-                cursor.execute("DELETE FROM StudyRooms WHERE RoomID = %s", (room_id,))
-            except MySQLError:
-                cursor.execute(
-                    "UPDATE StudyRooms SET AvailabilityStatus = 'Unavailable' WHERE RoomID = %s",
-                    (room_id,),
-                )
-                return jsonify({"message": "Room is referenced by reservations, so it was marked unavailable."})
+            cursor.execute("DELETE FROM StudyRooms WHERE RoomID = %s", (room_id,))
         else:
             cursor.execute(
                 "UPDATE StudyRooms SET AvailabilityStatus = 'Unavailable' WHERE RoomID = %s",
@@ -390,12 +394,35 @@ def create_timeslot(data):
     with db_cursor(commit=True) as (_, cursor):
         cursor.execute(
             """
+            SELECT SlotID
+            FROM TimeSlots
+            WHERE ReservationDate = %s
+              AND StartTime < %s
+              AND EndTime > %s
+            LIMIT 1
+            """,
+            (data["ReservationDate"], data["EndTime"], data["StartTime"]),
+        )
+        if cursor.fetchone():
+            raise ApiError("Error: This time slot overlaps an existing time slot.")
+
+        cursor.execute(
+            """
             INSERT INTO TimeSlots (ReservationDate, StartTime, EndTime)
             VALUES (%s, %s, %s)
             """,
             (data["ReservationDate"], data["StartTime"], data["EndTime"]),
         )
         return jsonify({"message": "Time slot added successfully.", "SlotID": cursor.lastrowid}), 201
+
+
+@app.delete("/api/timeslots/<int:slot_id>")
+def delete_timeslot(slot_id):
+    with db_cursor(commit=True) as (_, cursor):
+        cursor.execute("DELETE FROM TimeSlots WHERE SlotID = %s", (slot_id,))
+        if cursor.rowcount == 0:
+            raise ApiError("Error: Slot ID does not exist.", 404)
+    return jsonify({"message": "Time slot deleted successfully."})
 
 
 @app.get("/api/reservations")
@@ -449,14 +476,47 @@ def create_reservation(data):
     return jsonify(result), 201
 
 
+@app.delete("/api/reservations/<int:reservation_id>")
+def delete_reservation(reservation_id):
+    with db_cursor(commit=True) as (_, cursor):
+        cursor.execute("DELETE FROM Reservations WHERE ReservationID = %s", (reservation_id,))
+        if cursor.rowcount == 0:
+            raise ApiError("Error: Reservation ID does not exist.", 404)
+    return jsonify({"message": "Reservation deleted successfully."})
+
+
+@app.patch("/api/reservations/process-expired")
+def process_expired_reservations():
+    with db_cursor() as (connection, cursor):
+        cursor.execute(
+            """
+            UPDATE Reservations r
+            JOIN TimeSlots ts ON ts.SlotID = r.SlotID
+            SET r.Status = 'Cancelled'
+            WHERE r.Status = 'Reserved'
+              AND TIMESTAMP(ts.ReservationDate, ts.EndTime) < NOW()
+            """
+        )
+        cancelled_count = cursor.rowcount
+        connection.commit()
+    return jsonify({"message": f"Expired reservation check complete. Cancelled {cancelled_count} reservation(s)."})
+
+
 @app.patch("/api/reservations/<int:reservation_id>/cancel")
 def cancel_reservation(reservation_id):
     with db_cursor() as (connection, cursor):
         cursor.execute(
             """
-            SELECT ReservationID, RoomID, SlotID, Status
-            FROM Reservations
-            WHERE ReservationID = %s
+            SELECT
+                r.ReservationID,
+                r.RoomID,
+                r.SlotID,
+                r.Status,
+                TIMESTAMP(ts.ReservationDate, ts.StartTime) AS SlotStart,
+                TIMESTAMP(ts.ReservationDate, ts.EndTime) AS SlotEnd
+            FROM Reservations r
+            JOIN TimeSlots ts ON ts.SlotID = r.SlotID
+            WHERE r.ReservationID = %s
             FOR UPDATE
             """,
             (reservation_id,),
@@ -483,9 +543,16 @@ def complete_reservation(reservation_id):
     with db_cursor() as (connection, cursor):
         cursor.execute(
             """
-            SELECT ReservationID, RoomID, SlotID, Status
-            FROM Reservations
-            WHERE ReservationID = %s
+            SELECT
+                r.ReservationID,
+                r.RoomID,
+                r.SlotID,
+                r.Status,
+                TIMESTAMP(ts.ReservationDate, ts.StartTime) AS SlotStart,
+                TIMESTAMP(ts.ReservationDate, ts.EndTime) AS SlotEnd
+            FROM Reservations r
+            JOIN TimeSlots ts ON ts.SlotID = r.SlotID
+            WHERE r.ReservationID = %s
             FOR UPDATE
             """,
             (reservation_id,),
@@ -498,6 +565,17 @@ def complete_reservation(reservation_id):
             return jsonify({"message": "Reservation was already completed."})
         if reservation["Status"] not in ACTIVE_RESERVATION_STATUSES:
             raise ApiError("Error: Only reserved or checked-in reservations can be marked completed.")
+
+        cursor.execute(
+            """
+            SELECT
+                NOW() < %s AS IsTooEarly
+            """,
+            (reservation["SlotStart"],),
+        )
+        timing = cursor.fetchone()
+        if timing["IsTooEarly"]:
+            raise ApiError("Error: Cannot complete a reservation before its start time.")
 
         cursor.execute(
             """

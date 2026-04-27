@@ -4,14 +4,16 @@ import {
   CalendarClock,
   CheckCircle2,
   ClipboardList,
+  Database,
   DoorOpen,
   ListChecks,
   RefreshCw,
   Search,
+  Trash2,
   UserPlus,
   Users,
 } from 'lucide-react';
-import { del, get, patch, post, put } from './api.js';
+import { del, get, patch, post, put, subscribeToLastSql } from './api.js';
 
 const tabs = [
   { id: 'students', label: 'Students', icon: Users },
@@ -118,7 +120,7 @@ function SelectInput({ value, onChange, children }) {
   return <select value={value} onChange={(event) => onChange(event.target.value)}>{children}</select>;
 }
 
-function DataTable({ columns, rows, emptyText = 'No records found.' }) {
+function DataTable({ columns, rows, emptyText = 'No records found.', onDelete }) {
   if (!rows?.length) {
     return <div className="empty">{emptyText}</div>;
   }
@@ -131,6 +133,7 @@ function DataTable({ columns, rows, emptyText = 'No records found.' }) {
             {columns.map((column) => (
               <th key={column}>{column}</th>
             ))}
+            {onDelete && <th className="action-column">Actions</th>}
           </tr>
         </thead>
         <tbody>
@@ -139,6 +142,13 @@ function DataTable({ columns, rows, emptyText = 'No records found.' }) {
               {columns.map((column) => (
                 <td key={column}>{column === 'Status' ? <StatusBadge value={row[column]} /> : row[column] ?? '-'}</td>
               ))}
+              {onDelete && (
+                <td className="action-cell">
+                  <button className="row-delete" type="button" onClick={() => onDelete(row)} title="Delete row">
+                    <Trash2 size={16} />
+                  </button>
+                </td>
+              )}
             </tr>
           ))}
         </tbody>
@@ -156,10 +166,34 @@ function Notice({ notice, onDismiss }) {
   );
 }
 
+function SqlQueryPopup({ query, expanded, onToggle }) {
+  const displayQuery = query || 'No SQL query has run yet.';
+
+  return (
+    <button
+      className={expanded ? 'sql-popover expanded' : 'sql-popover'}
+      onClick={onToggle}
+      title="Toggle latest SQL query"
+      type="button"
+    >
+      <span className="sql-popover-header">
+        <span>
+          <Database size={16} />
+          Latest SQL
+        </span>
+        {expanded && <strong>Hide</strong>}
+      </span>
+      {expanded && <code>{displayQuery}</code>}
+    </button>
+  );
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('students');
   const [notice, setNotice] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [lastSql, setLastSql] = useState('');
+  const [sqlExpanded, setSqlExpanded] = useState(false);
 
   const [students, setStudents] = useState([]);
   const [rooms, setRooms] = useState([]);
@@ -251,11 +285,12 @@ export default function App() {
 
   async function loadAll() {
     await run(async () => {
+      const silentSql = { exposeSql: false };
       const [studentRows, roomRows, slotRows, reservationRows] = await Promise.all([
-        get('/students'),
-        get('/rooms'),
-        get('/timeslots'),
-        get('/reservations'),
+        get('/students', silentSql),
+        get('/rooms', silentSql),
+        get('/timeslots', silentSql),
+        get('/reservations', silentSql),
       ]);
       setStudents(studentRows);
       setRooms(roomRows);
@@ -266,6 +301,28 @@ export default function App() {
 
   useEffect(() => {
     loadAll();
+  }, []);
+
+  useEffect(() => subscribeToLastSql(setLastSql), []);
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+
+      const tagName = event.target?.tagName?.toLowerCase();
+      if (tagName === 'input' || tagName === 'textarea' || tagName === 'select') return;
+
+      if (event.key.toLowerCase() === 'q') {
+        setSqlExpanded((current) => !current);
+      }
+      if (event.key.toLowerCase() === 'h') {
+        event.preventDefault();
+        processExpiredReservations();
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   async function addStudent(event) {
@@ -291,6 +348,14 @@ export default function App() {
   async function deactivateStudent() {
     if (!studentEdit.StudentID) return showError(new Error('Enter a Student ID first.'));
     const result = await run(() => del(`/students/${studentEdit.StudentID}`));
+    if (result) {
+      showSuccess(result.message);
+      loadAll();
+    }
+  }
+
+  async function deleteStudentRow(row) {
+    const result = await run(() => del(`/students/${row.StudentID}?hard=true`));
     if (result) {
       showSuccess(result.message);
       loadAll();
@@ -332,6 +397,14 @@ export default function App() {
     }
   }
 
+  async function deleteRoomRow(row) {
+    const result = await run(() => del(`/rooms/${row.RoomID}?hard=true`));
+    if (result) {
+      showSuccess(result.message);
+      loadAll();
+    }
+  }
+
   async function searchRooms(event) {
     event.preventDefault();
     const rows = await run(() => get(`/rooms${queryString(roomSearch)}`));
@@ -343,6 +416,14 @@ export default function App() {
     const result = await run(() => post('/timeslots', compactPayload(slotForm)));
     if (result) {
       setSlotForm(emptySlot);
+      showSuccess(result.message);
+      loadAll();
+    }
+  }
+
+  async function deleteSlotRow(row) {
+    const result = await run(() => del(`/timeslots/${row.SlotID}`));
+    if (result) {
       showSuccess(result.message);
       loadAll();
     }
@@ -360,6 +441,14 @@ export default function App() {
     if (result) {
       showSuccess(result.message);
       setReservationForm({ StudentID: '', RoomID: '', SlotID: '' });
+      loadAll();
+    }
+  }
+
+  async function deleteReservationRow(row) {
+    const result = await run(() => del(`/reservations/${row.ReservationID}`));
+    if (result) {
+      showSuccess(result.message);
       loadAll();
     }
   }
@@ -385,6 +474,14 @@ export default function App() {
   async function completeReservation() {
     if (!reservationActionId) return showError(new Error('Enter a Reservation ID first.'));
     const result = await run(() => patch(`/reservations/${reservationActionId}/complete`));
+    if (result) {
+      showSuccess(result.message);
+      loadAll();
+    }
+  }
+
+  async function processExpiredReservations() {
+    const result = await run(() => patch('/reservations/process-expired'));
     if (result) {
       showSuccess(result.message);
       loadAll();
@@ -555,7 +652,7 @@ export default function App() {
                 </Field>
                 <button className="primary span-two" type="submit">Search</button>
               </form>
-              <DataTable columns={studentColumns} rows={students} />
+              <DataTable columns={studentColumns} rows={students} onDelete={deleteStudentRow} />
             </Panel>
           </div>
         )}
@@ -657,7 +754,7 @@ export default function App() {
                 </Field>
                 <button className="primary span-two" type="submit">Search</button>
               </form>
-              <DataTable columns={roomColumns} rows={rooms} />
+              <DataTable columns={roomColumns} rows={rooms} onDelete={deleteRoomRow} />
             </Panel>
           </div>
         )}
@@ -705,7 +802,7 @@ export default function App() {
             </Panel>
 
             <Panel title="Time Slots" icon={CalendarClock}>
-              <DataTable columns={slotColumns} rows={slots} />
+              <DataTable columns={slotColumns} rows={slots} onDelete={deleteSlotRow} />
             </Panel>
           </div>
         )}
@@ -776,7 +873,7 @@ export default function App() {
                 </Field>
                 <button className="primary" type="submit">Search</button>
               </form>
-              <DataTable columns={reservationColumns} rows={reservations} />
+              <DataTable columns={reservationColumns} rows={reservations} onDelete={deleteReservationRow} />
             </Panel>
           </div>
         )}
@@ -862,6 +959,8 @@ export default function App() {
           </div>
         )}
       </main>
+
+      <SqlQueryPopup query={lastSql} expanded={sqlExpanded} onToggle={() => setSqlExpanded((current) => !current)} />
     </div>
   );
 }

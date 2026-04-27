@@ -1,9 +1,13 @@
 import os
+from contextvars import ContextVar
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 
 import mysql.connector
+
+
+last_sql_statement = ContextVar("last_sql_statement", default="")
 
 
 def load_env_file():
@@ -35,10 +39,43 @@ def get_connection():
     )
 
 
+def reset_last_sql_statement():
+    last_sql_statement.set("")
+
+
+def get_last_sql_statement():
+    return last_sql_statement.get()
+
+
+class TrackingCursor:
+    def __init__(self, cursor):
+        self._cursor = cursor
+
+    def __getattr__(self, name):
+        return getattr(self._cursor, name)
+
+    def _remember_statement(self, fallback=""):
+        statement = getattr(self._cursor, "statement", None) or fallback
+        if statement:
+            last_sql_statement.set(str(statement))
+
+    def execute(self, operation, params=None, *args, **kwargs):
+        try:
+            return self._cursor.execute(operation, params, *args, **kwargs)
+        finally:
+            self._remember_statement(operation)
+
+    def executemany(self, operation, seq_params, *args, **kwargs):
+        try:
+            return self._cursor.executemany(operation, seq_params, *args, **kwargs)
+        finally:
+            self._remember_statement(operation)
+
+
 @contextmanager
 def db_cursor(commit=False):
     connection = get_connection()
-    cursor = connection.cursor(dictionary=True)
+    cursor = TrackingCursor(connection.cursor(dictionary=True))
     try:
         yield connection, cursor
         if commit:
