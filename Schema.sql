@@ -56,26 +56,3 @@ CREATE TABLE Reservations (
         ON UPDATE CASCADE
         ON DELETE RESTRICT
 );
-
-CREATE TABLE Waitlist (
-    WaitlistID INT AUTO_INCREMENT PRIMARY KEY,
-    StudentID INT NOT NULL,
-    RoomID INT NOT NULL,
-    SlotID INT NOT NULL,
-    WaitlistDate DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT fk_waitlist_student
-        FOREIGN KEY (StudentID) REFERENCES Students(StudentID)
-        ON UPDATE CASCADE
-        ON DELETE RESTRICT,
-    CONSTRAINT fk_waitlist_room
-        FOREIGN KEY (RoomID) REFERENCES StudyRooms(RoomID)
-        ON UPDATE CASCADE
-        ON DELETE RESTRICT,
-    CONSTRAINT fk_waitlist_slot
-        FOREIGN KEY (SlotID) REFERENCES TimeSlots(SlotID)
-        ON UPDATE CASCADE
-        ON DELETE RESTRICT,
-
-    CONSTRAINT uq_waitlist_student_room_slot UNIQUE (StudentID, RoomID, SlotID)
-);

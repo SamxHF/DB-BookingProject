@@ -43,8 +43,3 @@ INSERT INTO Reservations (ReservationID, StudentID, RoomID, SlotID, ReservationD
 (10, 3, 5, 10, DATE_SUB(NOW(), INTERVAL 6 DAY), 'Completed'),
 (11, 5, 3, 9, DATE_SUB(NOW(), INTERVAL 2 DAY), 'NoShow'),
 (12, 6, 4, 8, DATE_SUB(NOW(), INTERVAL 1 DAY), 'Reserved');
-
-INSERT INTO Waitlist (WaitlistID, StudentID, RoomID, SlotID, WaitlistDate) VALUES
-(1, 3, 1, 1, DATE_SUB(NOW(), INTERVAL 12 HOUR)),
-(2, 4, 1, 1, DATE_SUB(NOW(), INTERVAL 6 HOUR)),
-(3, 6, 2, 1, DATE_SUB(NOW(), INTERVAL 4 HOUR));

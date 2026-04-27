@@ -10,8 +10,7 @@ Full-stack database project for COSC444. The backend is a Flask REST API connect
 - Reservation management: reserve rooms, cancel reservations, mark reservations completed, and view reservation history.
 - Check-in handling: check in valid reservations during their time slot and reject early, cancelled, completed, no-show, or expired reservations with clear messages.
 - Reporting: available rooms for a slot, reservations by student/room/date/status, and students who reserved a specific room-slot.
-- Advanced feature 1: room availability recommendation by date, slot, capacity, room type, and sort order.
-- Advanced feature 2: waitlist with automatic promotion when a reservation is cancelled, and waitlist cleanup when a reservation is completed.
+- Advanced feature: room availability recommendation by date, slot, capacity, room type, and sort order.
 
 ## Project Structure
 
@@ -111,11 +110,9 @@ The Vite dev server proxies `/api` requests to Flask on port `5001`.
 1. Add a new student from the Students tab.
 2. Create a reservation using an active student, available room, and future time slot.
 3. Try reserving the same room and slot again to show double-booking prevention.
-4. Use "Join waitlist if booked" to add a student to the waitlist.
-5. Cancel the original reservation to show automatic waitlist promotion.
-6. Complete a reservation to show that stale waitlist entries for that room-slot are cleared.
-7. Use Reports to show student schedules, available rooms, and room-slot reservations.
-8. Use Advanced to show room recommendations and the waitlist queue.
+4. Use Advanced to show room recommendations for a date, slot, capacity, and room type.
+5. Use Reports to show student schedules, available rooms, and room-slot reservations.
+6. Check in or complete a reservation from the Reservations tab.
 
 ## Error Handling Covered
 
@@ -123,7 +120,7 @@ The backend converts common MySQL and input failures into user-friendly API mess
 
 - MySQL connection failure, missing database, missing tables, and login failure.
 - Foreign key violations from invalid student, room, or time slot IDs.
-- Duplicate reservations, duplicate waitlist entries, duplicate student emails, and duplicate room/slot records.
+- Duplicate reservations, duplicate student emails, and duplicate room/slot records.
 - Attempts to reserve with inactive students, unavailable rooms, already-booked rooms, duplicate reservations, invalid IDs, or past/expired slots.
 - Attempts to check in early, cancelled, completed, no-show, or expired reservations.
 - Students with 3 or more `NoShow` reservations are blocked from new reservations with a repeated no-show restriction message.

@@ -343,8 +343,7 @@ tr:last-child td {
   background: #fde1df;
 }
 
-.status-completed,
-.status-waitlisted {
+.status-completed {
   color: #4c3c12;
   background: #f7e8bb;
 }

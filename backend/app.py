@@ -59,8 +59,6 @@ def handle_mysql_error(error):
             message = "Error: This room is already reserved for the selected time slot."
         elif "uq_active_student_room_slot" in lower_message:
             message = "Error: This student already has the same active reservation."
-        elif "uq_waitlist_student_room_slot" in lower_message:
-            message = "Error: This student is already on the waitlist for that room and time slot."
         elif "email" in lower_message:
             message = "Error: A student with this email already exists."
         elif "uq_studyrooms_location" in lower_message:
@@ -175,18 +173,7 @@ def validate_student_room_slot(cursor, student_id, room_id, slot_id, for_update=
     return student, room, slot
 
 
-def insert_waitlist(cursor, student_id, room_id, slot_id):
-    cursor.execute(
-        """
-        INSERT INTO Waitlist (StudentID, RoomID, SlotID)
-        VALUES (%s, %s, %s)
-        """,
-        (student_id, room_id, slot_id),
-    )
-    return cursor.lastrowid
-
-
-def create_reservation_or_waitlist(student_id, room_id, slot_id, join_waitlist=False):
+def create_reservation_record(student_id, room_id, slot_id):
     with db_cursor() as (connection, cursor):
         student_id = to_positive_int(student_id, "Student ID")
         room_id = to_positive_int(room_id, "Room ID")
@@ -224,16 +211,11 @@ def create_reservation_or_waitlist(student_id, room_id, slot_id, join_waitlist=F
         )
         conflict = cursor.fetchone()
         if conflict:
-            if not join_waitlist:
-                raise ApiError(
-                    "Error: This room is already reserved for the selected time slot.",
-                    409,
-                    {"can_waitlist": True, "conflicting_reservation_id": conflict["ReservationID"]},
-                )
-
-            waitlist_id = insert_waitlist(cursor, student_id, room_id, slot_id)
-            connection.commit()
-            return {"type": "waitlist", "id": waitlist_id, "message": "Room is booked. Student added to waitlist."}
+            raise ApiError(
+                "Error: This room is already reserved for the selected time slot.",
+                409,
+                {"conflicting_reservation_id": conflict["ReservationID"]},
+            )
 
         cursor.execute(
             """
@@ -244,56 +226,7 @@ def create_reservation_or_waitlist(student_id, room_id, slot_id, join_waitlist=F
         )
         reservation_id = cursor.lastrowid
         connection.commit()
-        return {"type": "reservation", "id": reservation_id, "message": "Reservation created successfully."}
-
-
-def promote_next_waitlisted_student(cursor, room_id, slot_id):
-    while True:
-        cursor.execute(
-            """
-            SELECT
-                w.WaitlistID,
-                w.StudentID,
-                s.Name AS StudentName,
-                s.Status AS StudentStatus,
-                sr.AvailabilityStatus,
-                TIMESTAMP(ts.ReservationDate, ts.StartTime) > NOW() AS IsFuture
-            FROM Waitlist w
-            JOIN Students s ON s.StudentID = w.StudentID
-            JOIN StudyRooms sr ON sr.RoomID = w.RoomID
-            JOIN TimeSlots ts ON ts.SlotID = w.SlotID
-            WHERE w.RoomID = %s AND w.SlotID = %s
-            ORDER BY w.WaitlistID
-            LIMIT 1
-            FOR UPDATE
-            """,
-            (room_id, slot_id),
-        )
-        next_waitlist = cursor.fetchone()
-        if not next_waitlist:
-            return None
-
-        cursor.execute("DELETE FROM Waitlist WHERE WaitlistID = %s", (next_waitlist["WaitlistID"],))
-
-        if (
-            next_waitlist["StudentStatus"] != "Active"
-            or next_waitlist["AvailabilityStatus"] != "Available"
-            or not next_waitlist["IsFuture"]
-        ):
-            continue
-
-        cursor.execute(
-            """
-            INSERT INTO Reservations (StudentID, RoomID, SlotID, Status)
-            VALUES (%s, %s, %s, 'Reserved')
-            """,
-            (next_waitlist["StudentID"], room_id, slot_id),
-        )
-        return {
-            "ReservationID": cursor.lastrowid,
-            "StudentID": next_waitlist["StudentID"],
-            "StudentName": next_waitlist["StudentName"],
-        }
+        return {"id": reservation_id, "message": "Reservation created successfully."}
 
 
 @app.get("/api/health")
@@ -508,14 +441,12 @@ def list_reservations():
 @app.post("/api/reservations")
 @require_json("StudentID", "RoomID", "SlotID")
 def create_reservation(data):
-    result = create_reservation_or_waitlist(
+    result = create_reservation_record(
         data["StudentID"],
         data["RoomID"],
         data["SlotID"],
-        bool(data.get("join_waitlist")),
     )
-    status_code = 202 if result["type"] == "waitlist" else 201
-    return jsonify(result), status_code
+    return jsonify(result), 201
 
 
 @app.patch("/api/reservations/<int:reservation_id>/cancel")
@@ -535,7 +466,7 @@ def cancel_reservation(reservation_id):
             raise ApiError("Error: Reservation ID does not exist.", 404)
         if reservation["Status"] == "Cancelled":
             connection.commit()
-            return jsonify({"message": "Reservation was already cancelled.", "promoted": None})
+            return jsonify({"message": "Reservation was already cancelled."})
         if reservation["Status"] not in ACTIVE_RESERVATION_STATUSES:
             raise ApiError("Error: Only reserved or checked-in reservations can be cancelled.")
 
@@ -543,9 +474,8 @@ def cancel_reservation(reservation_id):
             "UPDATE Reservations SET Status = 'Cancelled' WHERE ReservationID = %s",
             (reservation_id,),
         )
-        promoted = promote_next_waitlisted_student(cursor, reservation["RoomID"], reservation["SlotID"])
         connection.commit()
-        return jsonify({"message": "Reservation cancelled successfully.", "promoted": promoted})
+        return jsonify({"message": "Reservation cancelled successfully."})
 
 
 @app.patch("/api/reservations/<int:reservation_id>/complete")
@@ -565,7 +495,7 @@ def complete_reservation(reservation_id):
             raise ApiError("Error: Reservation ID does not exist.", 404)
         if reservation["Status"] == "Completed":
             connection.commit()
-            return jsonify({"message": "Reservation was already completed.", "cleared_waitlist_count": 0})
+            return jsonify({"message": "Reservation was already completed."})
         if reservation["Status"] not in ACTIVE_RESERVATION_STATUSES:
             raise ApiError("Error: Only reserved or checked-in reservations can be marked completed.")
 
@@ -577,19 +507,8 @@ def complete_reservation(reservation_id):
             """,
             (reservation_id,),
         )
-        cursor.execute(
-            """
-            DELETE FROM Waitlist
-            WHERE RoomID = %s AND SlotID = %s
-            """,
-            (reservation["RoomID"], reservation["SlotID"]),
-        )
-        cleared_waitlist_count = cursor.rowcount
         connection.commit()
-    return jsonify({
-        "message": "Reservation marked as completed. Waitlist for this room-slot was closed.",
-        "cleared_waitlist_count": cleared_waitlist_count,
-    })
+    return jsonify({"message": "Reservation marked as completed."})
 
 
 @app.patch("/api/reservations/<int:reservation_id>/check-in")
@@ -664,29 +583,11 @@ def student_schedule(student_id):
         JOIN StudyRooms sr ON sr.RoomID = r.RoomID
         JOIN TimeSlots ts ON ts.SlotID = r.SlotID
         WHERE r.StudentID = %s
+        ORDER BY ts.ReservationDate, ts.StartTime
         """,
         (student_id,),
     )
-    waitlist = fetch_all(
-        """
-        SELECT
-            w.WaitlistID,
-            'Waitlist' AS EntryType,
-            'Waitlisted' AS Status,
-            sr.RoomName,
-            sr.Building,
-            ts.ReservationDate,
-            ts.StartTime,
-            ts.EndTime,
-            w.WaitlistDate AS CreatedAt
-        FROM Waitlist w
-        JOIN StudyRooms sr ON sr.RoomID = w.RoomID
-        JOIN TimeSlots ts ON ts.SlotID = w.SlotID
-        WHERE w.StudentID = %s
-        """,
-        (student_id,),
-    )
-    return jsonify(sorted(reservations + waitlist, key=lambda row: (row["ReservationDate"], row["StartTime"])))
+    return jsonify(reservations)
 
 
 @app.get("/api/rooms/<int:room_id>/reservations")
@@ -815,67 +716,6 @@ def recommend_rooms():
         ORDER BY {order_by}
     """
     return jsonify(fetch_all(sql, params))
-
-
-@app.get("/api/waitlist")
-def list_waitlist():
-    clauses, params = [], []
-    add_filter(clauses, params, "w.StudentID", request.args.get("student_id"), exact=True)
-    add_filter(clauses, params, "w.RoomID", request.args.get("room_id"), exact=True)
-    add_filter(clauses, params, "w.SlotID", request.args.get("slot_id"), exact=True)
-    sql = f"""
-        SELECT
-            w.WaitlistID,
-            w.StudentID,
-            s.Name AS StudentName,
-            w.RoomID,
-            sr.RoomName,
-            w.SlotID,
-            ts.ReservationDate,
-            ts.StartTime,
-            ts.EndTime,
-            w.WaitlistDate
-        FROM Waitlist w
-        JOIN Students s ON s.StudentID = w.StudentID
-        JOIN StudyRooms sr ON sr.RoomID = w.RoomID
-        JOIN TimeSlots ts ON ts.SlotID = w.SlotID
-        {build_where(clauses)}
-        ORDER BY w.RoomID, w.SlotID, w.WaitlistID
-    """
-    return jsonify(fetch_all(sql, params))
-
-
-@app.post("/api/waitlist")
-@require_json("StudentID", "RoomID", "SlotID")
-def join_waitlist(data):
-    with db_cursor() as (connection, cursor):
-        validate_student_room_slot(cursor, data["StudentID"], data["RoomID"], data["SlotID"], for_update=True)
-        cursor.execute(
-            """
-            SELECT ReservationID
-            FROM Reservations
-            WHERE RoomID = %s
-              AND SlotID = %s
-              AND Status IN ('Reserved', 'CheckedIn')
-            LIMIT 1
-            FOR UPDATE
-            """,
-            (data["RoomID"], data["SlotID"]),
-        )
-        if not cursor.fetchone():
-            raise ApiError("This room is available. Create a normal reservation instead.")
-        waitlist_id = insert_waitlist(cursor, data["StudentID"], data["RoomID"], data["SlotID"])
-        connection.commit()
-        return jsonify({"message": "Student added to waitlist.", "WaitlistID": waitlist_id}), 201
-
-
-@app.delete("/api/waitlist/<int:waitlist_id>")
-def remove_waitlist_entry(waitlist_id):
-    with db_cursor(commit=True) as (_, cursor):
-        cursor.execute("DELETE FROM Waitlist WHERE WaitlistID = %s", (waitlist_id,))
-        if cursor.rowcount == 0:
-            raise ApiError("Error: Waitlist ID does not exist.", 404)
-    return jsonify({"message": "Waitlist entry removed."})
 
 
 if __name__ == "__main__":

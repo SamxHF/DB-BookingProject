@@ -36,17 +36,6 @@ const reservationColumns = [
   'EndTime',
   'Status',
 ];
-const waitlistColumns = [
-  'WaitlistID',
-  'StudentName',
-  'RoomName',
-  'SlotID',
-  'ReservationDate',
-  'StartTime',
-  'EndTime',
-  'WaitlistDate',
-];
-
 const emptyStudent = {
   Name: '',
   Email: '',
@@ -146,7 +135,7 @@ function DataTable({ columns, rows, emptyText = 'No records found.' }) {
         </thead>
         <tbody>
           {rows.map((row, index) => (
-            <tr key={row.ReservationID || row.StudentID || row.RoomID || row.SlotID || row.WaitlistID || index}>
+            <tr key={row.ReservationID || row.StudentID || row.RoomID || row.SlotID || index}>
               {columns.map((column) => (
                 <td key={column}>{column === 'Status' ? <StatusBadge value={row[column]} /> : row[column] ?? '-'}</td>
               ))}
@@ -176,7 +165,6 @@ export default function App() {
   const [rooms, setRooms] = useState([]);
   const [slots, setSlots] = useState([]);
   const [reservations, setReservations] = useState([]);
-  const [waitlist, setWaitlist] = useState([]);
 
   const [studentForm, setStudentForm] = useState(emptyStudent);
   const [studentEdit, setStudentEdit] = useState({ StudentID: '', Email: '', Phone: '', Major: '', YearLevel: '', Status: '' });
@@ -203,7 +191,7 @@ export default function App() {
   const [slotForm, setSlotForm] = useState(emptySlot);
   const [slotSearch, setSlotSearch] = useState({ date: '', start_time: '', end_time: '', future_only: 'false' });
 
-  const [reservationForm, setReservationForm] = useState({ StudentID: '', RoomID: '', SlotID: '', join_waitlist: false });
+  const [reservationForm, setReservationForm] = useState({ StudentID: '', RoomID: '', SlotID: '' });
   const [reservationSearch, setReservationSearch] = useState({
     student_id: '',
     room_id: '',
@@ -228,7 +216,6 @@ export default function App() {
     sort: 'capacity',
   });
   const [recommendations, setRecommendations] = useState([]);
-  const [waitlistForm, setWaitlistForm] = useState({ StudentID: '', RoomID: '', SlotID: '' });
 
   const metrics = useMemo(
     () => [
@@ -236,9 +223,8 @@ export default function App() {
       { label: 'Rooms', value: rooms.length },
       { label: 'Slots', value: slots.length },
       { label: 'Reservations', value: reservations.length },
-      { label: 'Waitlist', value: waitlist.length },
     ],
-    [students, rooms, slots, reservations, waitlist],
+    [students, rooms, slots, reservations],
   );
 
   function showSuccess(message) {
@@ -265,18 +251,16 @@ export default function App() {
 
   async function loadAll() {
     await run(async () => {
-      const [studentRows, roomRows, slotRows, reservationRows, waitlistRows] = await Promise.all([
+      const [studentRows, roomRows, slotRows, reservationRows] = await Promise.all([
         get('/students'),
         get('/rooms'),
         get('/timeslots'),
         get('/reservations'),
-        get('/waitlist'),
       ]);
       setStudents(studentRows);
       setRooms(roomRows);
       setSlots(slotRows);
       setReservations(reservationRows);
-      setWaitlist(waitlistRows);
     });
   }
 
@@ -375,7 +359,7 @@ export default function App() {
     const result = await run(() => post('/reservations', compactPayload(reservationForm)));
     if (result) {
       showSuccess(result.message);
-      setReservationForm({ StudentID: '', RoomID: '', SlotID: '', join_waitlist: false });
+      setReservationForm({ StudentID: '', RoomID: '', SlotID: '' });
       loadAll();
     }
   }
@@ -384,8 +368,7 @@ export default function App() {
     if (!reservationActionId) return showError(new Error('Enter a Reservation ID first.'));
     const result = await run(() => patch(`/reservations/${reservationActionId}/cancel`));
     if (result) {
-      const promotion = result.promoted ? ` Promoted ${result.promoted.StudentName}.` : '';
-      showSuccess(`${result.message}${promotion}`);
+      showSuccess(result.message);
       loadAll();
     }
   }
@@ -403,8 +386,7 @@ export default function App() {
     if (!reservationActionId) return showError(new Error('Enter a Reservation ID first.'));
     const result = await run(() => patch(`/reservations/${reservationActionId}/complete`));
     if (result) {
-      const cleared = result.cleared_waitlist_count ? ` Cleared ${result.cleared_waitlist_count} waitlist entry/entries.` : '';
-      showSuccess(`${result.message}${cleared}`);
+      showSuccess(result.message);
       loadAll();
     }
   }
@@ -437,16 +419,6 @@ export default function App() {
     event.preventDefault();
     const rows = await run(() => get(`/recommendations/rooms${queryString(recommendQuery)}`));
     if (rows) setRecommendations(rows);
-  }
-
-  async function joinWaitlist(event) {
-    event.preventDefault();
-    const result = await run(() => post('/waitlist', compactPayload(waitlistForm)));
-    if (result) {
-      showSuccess(result.message);
-      setWaitlistForm({ StudentID: '', RoomID: '', SlotID: '' });
-      loadAll();
-    }
   }
 
   return (
@@ -763,14 +735,6 @@ export default function App() {
                     onChange={(value) => setField(setReservationForm, 'SlotID', value)}
                   />
                 </Field>
-                <label className="check-field">
-                  <input
-                    type="checkbox"
-                    checked={reservationForm.join_waitlist}
-                    onChange={(event) => setField(setReservationForm, 'join_waitlist', event.target.checked)}
-                  />
-                  <span>Join waitlist if booked</span>
-                </label>
                 <button className="primary span-two" type="submit">Reserve</button>
               </form>
             </Panel>
@@ -895,24 +859,6 @@ export default function App() {
               <DataTable columns={['RoomID', 'RoomName', 'Building', 'Floor', 'Capacity', 'RoomType', 'ReservationDate', 'StartTime', 'EndTime']} rows={recommendations} />
             </Panel>
 
-            <Panel title="Join Waitlist" icon={ListChecks}>
-              <form className="form-grid" onSubmit={joinWaitlist}>
-                <Field label="Student ID">
-                  <TextInput type="number" value={waitlistForm.StudentID} onChange={(value) => setField(setWaitlistForm, 'StudentID', value)} />
-                </Field>
-                <Field label="Room ID">
-                  <TextInput type="number" value={waitlistForm.RoomID} onChange={(value) => setField(setWaitlistForm, 'RoomID', value)} />
-                </Field>
-                <Field label="Slot ID">
-                  <TextInput type="number" value={waitlistForm.SlotID} onChange={(value) => setField(setWaitlistForm, 'SlotID', value)} />
-                </Field>
-                <button className="primary span-two" type="submit">Join Waitlist</button>
-              </form>
-            </Panel>
-
-            <Panel title="Waitlist Queue" icon={ListChecks}>
-              <DataTable columns={waitlistColumns} rows={waitlist} />
-            </Panel>
           </div>
         )}
       </main>
