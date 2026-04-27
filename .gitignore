@@ -1,0 +1,32 @@
+# Local environment variables
+.env
+.env.*
+!.env.example
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# JavaScript dependencies/build output
+node_modules/
+dist/
+build/
+
+# IDE/editor files
+.vscode/
+.idea/
+
+# macOS
+.DS_Store
+
+# Logs and local output
+*.log
+*.tmp
+*.bak
+
+# Database dumps/backups
+*.dump
+*.sql.gz
